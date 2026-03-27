@@ -1,0 +1,64 @@
+{
+  "name": "whetstone-agent",
+  "version": "1.0.0",
+  "description": "Your AI agent audits itself and gradually rewrites its own behaviour.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "bin": {
+    "whetstone-bootstrap": "./bin/bootstrap.js",
+    "whetstone-sense": "./bin/sense.js",
+    "whetstone-mutate": "./bin/mutate.js",
+    "whetstone-validate": "./bin/validate.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "lint": "tsc --noEmit",
+    "prepublishOnly": "npm run build && npm test"
+  },
+  "keywords": [
+    "ai",
+    "agent",
+    "self-improvement",
+    "evolution",
+    "thoughtlayer",
+    "openclaw",
+    "llm",
+    "machine-learning"
+  ],
+  "author": "Prasant Sudhakaran",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "typescript": "^5.9.3",
+    "vitest": "^2.1.9"
+  },
+  "files": [
+    "dist",
+    "bin",
+    "templates",
+    "README.md",
+    "ARCHITECTURE.md",
+    "LICENCE"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/prasants/whetstone.git"
+  },
+  "homepage": "https://github.com/prasants/whetstone#readme",
+  "bugs": {
+    "url": "https://github.com/prasants/whetstone/issues"
+  }
+}

@@ -1,0 +1,7 @@
+node_modules/
+dist/
+coverage/
+.whetstone/
+*.tgz
+.DS_Store
+.test-workspace*
