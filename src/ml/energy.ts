@@ -36,7 +36,15 @@ class MLP {
   constructor(
     inputDim: number,
     hiddenDim: number = 64,
+    seed: number = 42,
   ) {
+    // Seeded PRNG for reproducible initialisation
+    let s = seed;
+    const seededRandom = (): number => {
+      s = (s * 1664525 + 1013904223) & 0xffffffff;
+      return (s >>> 0) / 0xffffffff;
+    };
+
     // Xavier initialisation
     const scale1 = Math.sqrt(2.0 / (inputDim + hiddenDim));
     const scale2 = Math.sqrt(2.0 / (hiddenDim + 1));
@@ -46,12 +54,12 @@ class MLP {
       .map(() =>
         Array(inputDim)
           .fill(0)
-          .map(() => (Math.random() - 0.5) * 2 * scale1),
+          .map(() => (seededRandom() - 0.5) * 2 * scale1),
       );
     this.biasHidden = Array(hiddenDim).fill(0);
     this.weightsHiddenOutput = Array(hiddenDim)
       .fill(0)
-      .map(() => (Math.random() - 0.5) * 2 * scale2);
+      .map(() => (seededRandom() - 0.5) * 2 * scale2);
     this.biasOutput = 0;
   }
 
@@ -161,9 +169,8 @@ export class EnergyFunction {
 
   constructor(embeddingDim: number = 768) {
     this.embeddingDim = embeddingDim;
-    // Input: mutation embedding + context features
-    // Context features: 6 signal types + 6 categories + 4 files + 3 risk levels = 19
-    this.mlp = new MLP(embeddingDim + 19, 64);
+    // Input: 10 text features + 19 context features = 29
+    this.mlp = new MLP(29, 64);
   }
 
   /**
@@ -204,12 +211,41 @@ export class EnergyFunction {
    * Score a mutation (lower = better).
    */
   async score(mutation: Mutation, context: MutationContext): Promise<number> {
-    const mutationText = `${mutation.rationale} | ${mutation.content}`;
-    const embedding = await getEmbedding(mutationText);
+    const textFeatures = this.encodeText(mutation);
     const contextFeatures = this.encodeContext(context);
-    const input = [...embedding, ...contextFeatures];
+    const input = [...textFeatures, ...contextFeatures];
 
     return this.mlp.forward(input);
+  }
+
+  /**
+   * Extract text-based features from a mutation (no embeddings needed).
+   */
+  private encodeText(mutation: Mutation): number[] {
+    const text = `${mutation.content} ${mutation.rationale}`;
+    const lower = text.toLowerCase();
+    return [
+      // Length features
+      Math.min(text.length / 200, 1), // normalised length
+      (text.match(/\b\w+\b/g) || []).length / 30, // word count normalised
+
+      // Specificity signals (specific > vague)
+      /\b(always|never|before|after|every|must)\b/i.test(text) ? 1 : 0,
+      /\b(sometimes|maybe|try|consider|might)\b/i.test(text) ? 1 : 0, // vagueness
+      /\b(check|verify|confirm|validate|ensure)\b/i.test(text) ? 1 : 0, // actionable verbs
+      /\d+/.test(text) ? 1 : 0, // contains numbers (specific)
+
+      // Risk signals
+      mutation.risk === 'low' ? 0 : mutation.risk === 'medium' ? 0.5 : 1,
+      mutation.signalCount / 10, // normalised signal count
+
+      // Action type
+      mutation.action === 'add' ? 0 : mutation.action === 'modify' ? 0.5 : 1,
+
+      // File importance
+      mutation.file === 'SOUL.md' ? 1 : mutation.file === 'AGENTS.md' ? 0.8 :
+        mutation.file === 'HEARTBEAT.md' ? 0.6 : 0.4,
+    ];
   }
 
   /**
@@ -227,10 +263,9 @@ export class EnergyFunction {
     const examples: Array<{ input: number[]; target: number }> = [];
 
     for (const { mutation, context, validation } of trainingData) {
-      const mutationText = `${mutation.rationale} | ${mutation.content}`;
-      const embedding = await getEmbedding(mutationText);
+      const textFeatures = this.encodeText(mutation);
       const contextFeatures = this.encodeContext(context);
-      const input = [...embedding, ...contextFeatures];
+      const input = [...textFeatures, ...contextFeatures];
 
       // Target: 0 for keep (good), 1 for rollback (bad), 0.5 for extend (uncertain)
       const target =
