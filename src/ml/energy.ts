@@ -1,0 +1,429 @@
+/**
+ * Energy-Based Mutation Ranking.
+ *
+ * Implements a learned energy function E(mutation, context) → score
+ * where lower energy = higher confidence the mutation will help.
+ *
+ * Training signal: validated mutations (keep → low energy, rollback → high energy).
+ */
+
+import { getEmbedding, cosineSimilarity } from './classifier.js';
+import { Mutation, Validation } from '../types.js';
+
+export interface MutationContext {
+  recentSignalTypes: string[];
+  recentCategories: string[];
+  targetFile: string;
+  riskLevel: string;
+}
+
+export interface RankedMutation {
+  mutation: Mutation;
+  energy: number;
+  confidence: 'high' | 'medium' | 'low';
+}
+
+/**
+ * Simple MLP for energy scoring.
+ * Uses a single hidden layer for interpretability.
+ */
+class MLP {
+  private weightsInputHidden: number[][];
+  private biasHidden: number[];
+  private weightsHiddenOutput: number[];
+  private biasOutput: number;
+
+  constructor(
+    inputDim: number,
+    hiddenDim: number = 64,
+  ) {
+    // Xavier initialisation
+    const scale1 = Math.sqrt(2.0 / (inputDim + hiddenDim));
+    const scale2 = Math.sqrt(2.0 / (hiddenDim + 1));
+
+    this.weightsInputHidden = Array(hiddenDim)
+      .fill(0)
+      .map(() =>
+        Array(inputDim)
+          .fill(0)
+          .map(() => (Math.random() - 0.5) * 2 * scale1),
+      );
+    this.biasHidden = Array(hiddenDim).fill(0);
+    this.weightsHiddenOutput = Array(hiddenDim)
+      .fill(0)
+      .map(() => (Math.random() - 0.5) * 2 * scale2);
+    this.biasOutput = 0;
+  }
+
+  private relu(x: number): number {
+    return Math.max(0, x);
+  }
+
+  private sigmoid(x: number): number {
+    return 1 / (1 + Math.exp(-x));
+  }
+
+  forward(input: number[]): number {
+    // Hidden layer with ReLU
+    const hidden = this.weightsInputHidden.map((weights, i) => {
+      const sum = weights.reduce((acc, w, j) => acc + w * input[j], 0);
+      return this.relu(sum + this.biasHidden[i]);
+    });
+
+    // Output layer with sigmoid (energy in [0, 1])
+    const output = this.weightsHiddenOutput.reduce(
+      (acc, w, i) => acc + w * hidden[i],
+      0,
+    );
+    return this.sigmoid(output + this.biasOutput);
+  }
+
+  /**
+   * Simple gradient descent training step.
+   */
+  trainStep(input: number[], target: number, lr: number = 0.01): number {
+    // Forward pass
+    const hidden = this.weightsInputHidden.map((weights, i) => {
+      const sum = weights.reduce((acc, w, j) => acc + w * input[j], 0);
+      return { pre: sum + this.biasHidden[i], post: this.relu(sum + this.biasHidden[i]) };
+    });
+
+    const outputPre =
+      this.weightsHiddenOutput.reduce((acc, w, i) => acc + w * hidden[i].post, 0) +
+      this.biasOutput;
+    const output = this.sigmoid(outputPre);
+
+    // Loss (MSE)
+    const loss = 0.5 * (output - target) ** 2;
+
+    // Backward pass
+    const dOutput = (output - target) * output * (1 - output); // sigmoid derivative
+
+    // Gradients for output layer
+    const dWeightsHiddenOutput = hidden.map((h) => dOutput * h.post);
+    const dBiasOutput = dOutput;
+
+    // Gradients for hidden layer
+    const dHidden = this.weightsHiddenOutput.map(
+      (w, i) => dOutput * w * (hidden[i].pre > 0 ? 1 : 0), // ReLU derivative
+    );
+
+    const dWeightsInputHidden = this.weightsInputHidden.map((_, i) =>
+      input.map((x) => dHidden[i] * x),
+    );
+    const dBiasHidden = dHidden;
+
+    // Update weights
+    for (let i = 0; i < this.weightsHiddenOutput.length; i++) {
+      this.weightsHiddenOutput[i] -= lr * dWeightsHiddenOutput[i];
+    }
+    this.biasOutput -= lr * dBiasOutput;
+
+    for (let i = 0; i < this.weightsInputHidden.length; i++) {
+      for (let j = 0; j < this.weightsInputHidden[i].length; j++) {
+        this.weightsInputHidden[i][j] -= lr * dWeightsInputHidden[i][j];
+      }
+      this.biasHidden[i] -= lr * dBiasHidden[i];
+    }
+
+    return loss;
+  }
+
+  exportWeights(): {
+    inputHidden: number[][];
+    biasHidden: number[];
+    hiddenOutput: number[];
+    biasOutput: number;
+  } {
+    return {
+      inputHidden: this.weightsInputHidden,
+      biasHidden: this.biasHidden,
+      hiddenOutput: this.weightsHiddenOutput,
+      biasOutput: this.biasOutput,
+    };
+  }
+
+  loadWeights(weights: ReturnType<typeof this.exportWeights>): void {
+    this.weightsInputHidden = weights.inputHidden;
+    this.biasHidden = weights.biasHidden;
+    this.weightsHiddenOutput = weights.hiddenOutput;
+    this.biasOutput = weights.biasOutput;
+  }
+}
+
+/**
+ * Energy function for ranking mutations.
+ */
+export class EnergyFunction {
+  private mlp: MLP;
+  private embeddingDim: number;
+  private trained: boolean = false;
+
+  constructor(embeddingDim: number = 768) {
+    this.embeddingDim = embeddingDim;
+    // Input: mutation embedding + context features
+    // Context features: 6 signal types + 6 categories + 4 files + 3 risk levels = 19
+    this.mlp = new MLP(embeddingDim + 19, 64);
+  }
+
+  /**
+   * Encode context as a feature vector.
+   */
+  private encodeContext(context: MutationContext): number[] {
+    const signalTypes = ['correction', 'failure', 'takeover', 'frustration', 'style', 'success'];
+    const categories = ['tool_use', 'knowledge', 'style', 'judgment', 'speed', 'memory'];
+    const files = ['SOUL.md', 'TOOLS.md', 'AGENTS.md', 'HEARTBEAT.md'];
+    const risks = ['low', 'medium', 'high'];
+
+    const features: number[] = [];
+
+    // One-hot encode signal types (count-based)
+    for (const type of signalTypes) {
+      features.push(context.recentSignalTypes.filter((t) => t === type).length / 10);
+    }
+
+    // One-hot encode categories (count-based)
+    for (const cat of categories) {
+      features.push(context.recentCategories.filter((c) => c === cat).length / 10);
+    }
+
+    // One-hot encode target file
+    for (const file of files) {
+      features.push(context.targetFile === file ? 1 : 0);
+    }
+
+    // One-hot encode risk level
+    for (const risk of risks) {
+      features.push(context.riskLevel === risk ? 1 : 0);
+    }
+
+    return features;
+  }
+
+  /**
+   * Score a mutation (lower = better).
+   */
+  async score(mutation: Mutation, context: MutationContext): Promise<number> {
+    const mutationText = `${mutation.rationale} | ${mutation.content}`;
+    const embedding = await getEmbedding(mutationText);
+    const contextFeatures = this.encodeContext(context);
+    const input = [...embedding, ...contextFeatures];
+
+    return this.mlp.forward(input);
+  }
+
+  /**
+   * Train on validated mutations.
+   */
+  async train(
+    trainingData: Array<{
+      mutation: Mutation;
+      context: MutationContext;
+      validation: Validation;
+    }>,
+    epochs: number = 100,
+  ): Promise<{ finalLoss: number }> {
+    // Prepare training examples
+    const examples: Array<{ input: number[]; target: number }> = [];
+
+    for (const { mutation, context, validation } of trainingData) {
+      const mutationText = `${mutation.rationale} | ${mutation.content}`;
+      const embedding = await getEmbedding(mutationText);
+      const contextFeatures = this.encodeContext(context);
+      const input = [...embedding, ...contextFeatures];
+
+      // Target: 0 for keep (good), 1 for rollback (bad), 0.5 for extend (uncertain)
+      const target =
+        validation.verdict === 'keep'
+          ? 0.0
+          : validation.verdict === 'rollback'
+            ? 1.0
+            : 0.5;
+
+      examples.push({ input, target });
+    }
+
+    // Train
+    let totalLoss = 0;
+    for (let epoch = 0; epoch < epochs; epoch++) {
+      totalLoss = 0;
+      // Shuffle examples
+      const shuffled = [...examples].sort(() => Math.random() - 0.5);
+
+      for (const { input, target } of shuffled) {
+        totalLoss += this.mlp.trainStep(input, target, 0.01);
+      }
+
+      if (epoch % 10 === 0) {
+        console.log(`Epoch ${epoch}: loss = ${(totalLoss / examples.length).toFixed(4)}`);
+      }
+    }
+
+    this.trained = true;
+    return { finalLoss: totalLoss / examples.length };
+  }
+
+  /**
+   * Rank mutations by energy (lowest first).
+   */
+  async rank(
+    mutations: Mutation[],
+    context: MutationContext,
+  ): Promise<RankedMutation[]> {
+    const scored = await Promise.all(
+      mutations.map(async (m) => ({
+        mutation: m,
+        energy: await this.score(m, context),
+      })),
+    );
+
+    scored.sort((a, b) => a.energy - b.energy);
+
+    return scored.map((s) => ({
+      ...s,
+      confidence:
+        s.energy < 0.3 ? 'high' : s.energy < 0.6 ? 'medium' : 'low',
+    }));
+  }
+
+  /**
+   * Check if trained.
+   */
+  isTrained(): boolean {
+    return this.trained;
+  }
+
+  /**
+   * Export weights.
+   */
+  exportWeights(): ReturnType<MLP['exportWeights']> {
+    return this.mlp.exportWeights();
+  }
+
+  /**
+   * Load weights.
+   */
+  loadWeights(weights: ReturnType<MLP['exportWeights']>): void {
+    this.mlp.loadWeights(weights);
+    this.trained = true;
+  }
+}
+
+/**
+ * Generate synthetic training data for cold start.
+ */
+export function generateSyntheticEnergyTrainingData(): Array<{
+  mutation: Mutation;
+  context: MutationContext;
+  validation: Validation;
+}> {
+  const data: Array<{
+    mutation: Mutation;
+    context: MutationContext;
+    validation: Validation;
+  }> = [];
+
+  // Good mutations (keep)
+  const goodMutations = [
+    {
+      content: 'Before running remote commands, check if the node runner is available',
+      rationale: 'Agent used SSH 5 times when node runner was available',
+      signalsBefore: 5,
+      signalsAfter: 1,
+    },
+    {
+      content: 'Query the database directly instead of asking the user for data',
+      rationale: 'Agent asked user for data that was already in the database 4 times',
+      signalsBefore: 4,
+      signalsAfter: 0,
+    },
+    {
+      content: 'Use British English spellings',
+      rationale: 'User corrected American spellings 3 times',
+      signalsBefore: 3,
+      signalsAfter: 0,
+    },
+  ];
+
+  for (const { content, rationale, signalsBefore, signalsAfter } of goodMutations) {
+    data.push({
+      mutation: {
+        id: `M-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+        file: 'SOUL.md',
+        action: 'add',
+        location: '## Pre-Flight Checks',
+        content,
+        risk: 'low',
+        rationale,
+        signalCount: signalsBefore,
+        signalIds: [],
+        expectedImpact: 'Reduce corrections',
+      },
+      context: {
+        recentSignalTypes: Array(signalsBefore).fill('correction'),
+        recentCategories: Array(signalsBefore).fill('tool_use'),
+        targetFile: 'SOUL.md',
+        riskLevel: 'low',
+      },
+      validation: {
+        mutationId: '',
+        signalsBefore,
+        signalsAfter,
+        verdict: 'keep',
+        reason: 'Signals decreased',
+        impactScore: signalsBefore - signalsAfter,
+        validatedAt: new Date().toISOString(),
+      },
+    });
+  }
+
+  // Bad mutations (rollback)
+  const badMutations = [
+    {
+      content: 'When asked about Project X, the budget is $50k',
+      rationale: 'User mentioned Project X budget once',
+      signalsBefore: 1,
+      signalsAfter: 2,
+    },
+    {
+      content: 'Always use verbose output',
+      rationale: 'User wanted verbose output once',
+      signalsBefore: 1,
+      signalsAfter: 3,
+    },
+  ];
+
+  for (const { content, rationale, signalsBefore, signalsAfter } of badMutations) {
+    data.push({
+      mutation: {
+        id: `M-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+        file: 'TOOLS.md',
+        action: 'add',
+        location: '## Notes',
+        content,
+        risk: 'low',
+        rationale,
+        signalCount: signalsBefore,
+        signalIds: [],
+        expectedImpact: 'Reduce corrections',
+      },
+      context: {
+        recentSignalTypes: ['correction'],
+        recentCategories: ['knowledge'],
+        targetFile: 'TOOLS.md',
+        riskLevel: 'low',
+      },
+      validation: {
+        mutationId: '',
+        signalsBefore,
+        signalsAfter,
+        verdict: 'rollback',
+        reason: 'Signals increased',
+        impactScore: signalsBefore - signalsAfter,
+        validatedAt: new Date().toISOString(),
+      },
+    });
+  }
+
+  return data;
+}

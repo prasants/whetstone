@@ -110,58 +110,73 @@ All data lives in [ThoughtLayer](https://github.com/prasants/thoughtlayer) (doma
 
 Flat files work for simple cases. But when you have ten agents generating hundreds of signals per week, you need semantic search, relationship tracking, and temporal weighting. ThoughtLayer provides all three with zero cloud dependency — it runs entirely on local models via Ollama.
 
-## ML Architecture (Roadmap)
+## ML Components (Implemented)
 
-Whetstone's current loops are rule-based. The roadmap replaces hand-coded heuristics with small, specialised models that learn from accumulated data.
+Whetstone includes four ML components that work out of the box. They train on synthetic data at cold start and improve as real data accumulates.
 
 ### Signal Classifier
 
-Replace the LLM-based sense prompt with a fine-tuned local classifier. The training signal is free — it's already in every conversation:
+A centroid-based classifier on top of nomic-embed-text embeddings via Ollama. Detects signal types (correction, failure, takeover, frustration, style, success) from conversation text.
 
-- User contradicts agent → correction
-- User re-does a task → takeover
-- Sentiment shift after agent response → frustration
+- Trains on 100+ synthetic examples at cold start
+- Improves as real signals accumulate
+- Zero tokens spent per heartbeat (no LLM prompt needed)
 
-A small model (fine-tuned on top of nomic-embed-text embeddings) learns to detect these patterns from conversation structure alone, without spending tokens on the sense prompt at every heartbeat.
+```typescript
+import { Whetstone } from 'whetstone-agent';
+
+const whetstone = new Whetstone('/path/to/workspace');
+await whetstone.init(); // Trains classifier if needed
+
+const signal = await whetstone.detectSignal("No, I meant the other file");
+// { type: 'correction', category: 'judgment', confidence: 'high' }
+```
 
 ### Joint Embedding Space
 
-Embed signals, contexts, and rules into a shared representation space where signals with the same root cause cluster together, even when the surface text differs. "Agent used SSH instead of the node runner" and "Agent defaulted to the familiar tool instead of the correct one" become neighbours.
+Signals are embedded into a shared representation space where signals with the same root cause cluster together, even when the surface text differs.
 
-Training data: every signal→mutation→validation triple. If two signals led to the same successful mutation, their embeddings converge.
+- Automatic clustering by semantic similarity
+- Overfitting detection (rejects rules too similar to one specific signal)
+- Incremental updates as new signals arrive
 
 ### Energy-Based Mutation Ranking
 
-Train an energy function E(mutation, context) → score:
+A small MLP (64 hidden units) that predicts mutation effectiveness. Lower energy = higher confidence the mutation will reduce correction frequency.
 
-- Low energy = high confidence the mutation will reduce correction frequency
-- High energy = uncertain or likely ineffective
+- Input: mutation embedding + context features
+- Output: energy score in [0, 1]
+- Trains on synthetic good/bad mutation examples at cold start
+- Improves as real validation data accumulates
 
-After 50–100 mutation cycles, this energy function replaces vibes-based ranking with empirical evidence.
+```typescript
+const rankedMutations = await whetstone.rankMutations(proposedMutations);
+// Sorted by energy (lowest = best)
+```
 
 ### Cross-Agent Transfer
 
-When one agent learns "always verify database results before presenting them," that learning transfers to every agent that queries databases. The mechanism: retrieve the K nearest validated rules from any agent, weighted by semantic similarity, validation score, and domain overlap.
+When one agent validates a rule, it becomes available to all other agents sharing the same store. Transfer scoring combines semantic similarity, validation impact, and domain overlap.
+
+```typescript
+const candidates = await whetstone.getTransferCandidates(
+  "database query failing",
+  ["database"],  // tools involved
+  ["TOOLS.md"],  // files involved
+);
+// Returns validated rules from other agents, ranked by transfer score
+```
 
 ### The Practical Stack
 
 | Component | Model | Runtime |
 |-----------|-------|---------|
-| Signal classifier | Fine-tuned nomic-embed-text | Ollama (local) |
-| Signal/rule embeddings | nomic-embed-text (base) | Ollama (local) |
-| Mutation energy function | Small MLP on embeddings | Python/ONNX (local) |
-| Cross-agent retrieval | ThoughtLayer vector search | Already built |
+| Signal classifier | Centroid classifier on nomic-embed-text | Ollama (local) |
+| Joint embeddings | nomic-embed-text | Ollama (local) |
+| Energy function | 2-layer MLP (input→64→1) | Pure TypeScript |
+| Cross-agent transfer | Weighted semantic retrieval | Pure TypeScript |
 
-The LLM stays in the loop for mutation *generation*. The ranking, filtering, and validation move to learned models. The LLM proposes; the energy function disposes.
-
-### Cold Start Timeline
-
-| Phase | Duration | What Happens |
-|-------|----------|-------------|
-| Accumulate | Weeks 1–4 | Rule-based system runs, signals accumulate |
-| Classify | Weeks 4–8 | Train signal classifier, switch from prompt-based to model-based sensing |
-| Rank | Weeks 8–16 | Train energy function on mutation→validation pairs |
-| Transfer | Week 16+ | Cross-agent transfer learning kicks in |
+Everything runs locally. No cloud dependency. No API keys.
 
 Full architecture details: [ARCHITECTURE.md](./ARCHITECTURE.md)
 

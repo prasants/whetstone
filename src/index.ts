@@ -3,7 +3,40 @@
  *
  * Three loops that turn corrections into durable behaviour changes:
  * Sense → Mutate → Validate.
+ *
+ * ML components:
+ * - Signal Classifier: Learned signal detection
+ * - Joint Embeddings: Cluster signals by root cause
+ * - Energy Function: Rank mutations by predicted effectiveness
+ * - Cross-Agent Transfer: Share validated rules between agents
  */
+
+// Main class
+export { Whetstone, type WhetstoneState } from './whetstone.js';
+
+// ML components
+export {
+  SignalClassifier,
+  getEmbedding,
+  cosineSimilarity,
+  generateSyntheticTrainingData,
+  JointEmbeddingSpace,
+  EnergyFunction,
+  generateSyntheticEnergyTrainingData,
+  CrossAgentStore,
+  transferToMutation,
+} from './ml/index.js';
+
+export type {
+  ClassifierPrediction,
+  TrainingExample,
+  EmbeddedSignal,
+  SignalCluster,
+  MutationContext,
+  RankedMutation,
+  ValidatedRule,
+  TransferCandidate,
+} from './ml/index.js';
 
 // Types
 export type {
@@ -17,7 +50,6 @@ export type {
   RiskLevel,
   Validation,
   ValidationVerdict,
-  SignalCluster,
   WhetstoneConfig,
   ThoughtLayerEntry,
   ThoughtLayerQueryResult,
