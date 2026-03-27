@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "description": "Whetstone evaluation dataset — labelled signals and mutation ranking pairs",
+  "signals": [
+    {"text": "No, I meant the other file", "expected_type": "correction", "expected_category": "judgment"},
+    {"text": "Actually, use the node runner not SSH", "expected_type": "correction", "expected_category": "tool_use"},
+    {"text": "That's wrong, the amount is $50k not $30k", "expected_type": "correction", "expected_category": "judgment"},
+    {"text": "Wrong tool, use curl instead of wget", "expected_type": "correction", "expected_category": "tool_use"},
+    {"text": "I said British English, not American", "expected_type": "correction", "expected_category": "style"},
+    {"text": "What the fuck is this garbage", "expected_type": "frustration", "expected_category": "judgment"},
+    {"text": "I already told you three times", "expected_type": "frustration", "expected_category": "judgment"},
+    {"text": "WHY DO YOU KEEP DOING THIS", "expected_type": "frustration", "expected_category": "judgment"},
+    {"text": "This is completely unusable", "expected_type": "frustration", "expected_category": "judgment"},
+    {"text": "Are you even reading what I write?", "expected_type": "frustration", "expected_category": "judgment"},
+    {"text": "Let me just do it myself", "expected_type": "takeover", "expected_category": "tool_use"},
+    {"text": "Forget it, I'll handle the deployment", "expected_type": "takeover", "expected_category": "tool_use"},
+    {"text": "Give me access, I'll fix this", "expected_type": "takeover", "expected_category": "tool_use"},
+    {"text": "The command failed with exit code 1", "expected_type": "failure", "expected_category": "tool_use"},
+    {"text": "API returned 500 internal server error again", "expected_type": "failure", "expected_category": "tool_use"},
+    {"text": "Connection refused on port 3000", "expected_type": "failure", "expected_category": "tool_use"},
+    {"text": "Make it more concise, this is too wordy", "expected_type": "correction", "expected_category": "style"},
+    {"text": "Use tables not bullet points", "expected_type": "correction", "expected_category": "style"},
+    {"text": "Perfect, exactly what I needed", "expected_type": "success", "expected_category": "judgment"},
+    {"text": "That's spot on, great work", "expected_type": "success", "expected_category": "judgment"},
+    {"text": "You've misunderstood the entire requirement", "expected_type": "correction", "expected_category": "judgment"},
+    {"text": "Stop guessing and read the documentation", "expected_type": "frustration", "expected_category": "judgment"},
+    {"text": "The build is broken again, third time today", "expected_type": "failure", "expected_category": "tool_use"},
+    {"text": "Never mind, I'll write the script myself", "expected_type": "takeover", "expected_category": "tool_use"},
+    {"text": "This is much better than before", "expected_type": "success", "expected_category": "judgment"},
+    {"text": "You presented a roadmap as if it were shipped", "expected_type": "correction", "expected_category": "judgment"},
+    {"text": "Don't use em dashes, I've told you this", "expected_type": "correction", "expected_category": "style"},
+    {"text": "The database migration failed silently", "expected_type": "failure", "expected_category": "tool_use"},
+    {"text": "I'm taking over this task from here", "expected_type": "takeover", "expected_category": "tool_use"},
+    {"text": "Excellent analysis, keep going", "expected_type": "success", "expected_category": "judgment"}
+  ],
+  "mutation_pairs": [
+    {
+      "better": {"content": "Before running remote commands, check if the node runner is available", "signal_count": 5, "signals_after": 1},
+      "worse": {"content": "Always use SSH for remote commands", "signal_count": 5, "signals_after": 6},
+      "reason": "Better mutation addresses root cause, worse mutation entrenches the bad pattern"
+    },
+    {
+      "better": {"content": "Write key facts to SESSION-STATE.md before responding", "signal_count": 4, "signals_after": 0},
+      "worse": {"content": "Try to remember important details", "signal_count": 4, "signals_after": 4},
+      "reason": "Better mutation creates durable memory, worse mutation is vague and unactionable"
+    },
+    {
+      "better": {"content": "Use British English spellings throughout", "signal_count": 3, "signals_after": 0},
+      "worse": {"content": "Check spelling sometimes", "signal_count": 3, "signals_after": 2},
+      "reason": "Better mutation is specific and testable, worse is vague"
+    },
+    {
+      "better": {"content": "Never present roadmaps as shipped features. Verify every claimed feature is actually implemented.", "signal_count": 1, "signals_after": 0},
+      "worse": {"content": "Be more careful about claims", "signal_count": 1, "signals_after": 1},
+      "reason": "Better mutation is specific and actionable, worse is vague"
+    },
+    {
+      "better": {"content": "When a task is delegated, check for new output every 10 minutes. No output = stalled.", "signal_count": 3, "signals_after": 0},
+      "worse": {"content": "Monitor delegated tasks", "signal_count": 3, "signals_after": 2},
+      "reason": "Better mutation has specific criteria and timeline, worse is unactionable"
+    }
+  ]
+}

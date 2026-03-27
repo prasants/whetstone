@@ -1,0 +1,13 @@
+{
+  "timestamp": "2026-03-27T20:08:14.267Z",
+  "classification": {
+    "type_accuracy": 0.03333333333333333,
+    "category_accuracy": 0.03333333333333333,
+    "no_prediction_rate": 0.9666666666666667,
+    "total": 30
+  },
+  "ranking": {
+    "accuracy": 0.2,
+    "total": 5
+  }
+}
