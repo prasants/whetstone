@@ -155,6 +155,7 @@ export class SignalClassifier {
       /\bthat'?s not\b/i, /\bincorrect\b/i, /\bfix this\b/i,
       /\bnot (\w+ )+but\b/i, /\binstead of\b/i, /\bdon'?t use\b/i,
       /\byou'?ve got it\b/i, /\bclarify\b/i, /\bcorrect answer\b/i,
+      /\bpresented .* as\b/i, /\bclaimed\b/i, /\bmisled\b/i,
     ];
     scores.set('correction', correctionPatterns.filter(p => p.test(text)).length);
 
@@ -166,6 +167,9 @@ export class SignalClassifier {
       /[A-Z]{4,}/, // ALL CAPS
       /\bhow many times\b/i, /\bcan you not\b/i, /\bwasting my time\b/i,
       /\blost my patience\b/i, /\bhad enough\b/i, /\bsick.*tired\b/i,
+      /\balready told you\b/i, /\bunusable\b/i, /\beven (reading|listening|trying)\b/i,
+      /\bstop (guessing|doing|making)\b/i, /\bcompletely\s+(useless|unusable|wrong|broken)\b/i,
+      /\bi can'?t believe\b/i, /\bfor (god|christ|fuck)'?s sake\b/i,
     ];
     scores.set('frustration', frustrationPatterns.filter(p => p.test(text)).length);
 

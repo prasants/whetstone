@@ -1,11 +1,10 @@
 {
-  "timestamp": "2026-03-27T20:08:14Z",
-  "commit": "bf1036a",
+  "timestamp": "2026-03-27T21:11:18Z",
+  "commit": "6c9053e",
   "metrics": {
-    "classification_type_accuracy": 0.033,
-    "classification_category_accuracy": 0.033,
-    "classification_no_prediction_rate": 0.967,
-    "ranking_accuracy": 0.200
-  },
-  "notes": "Mock embeddings (deterministic hash). Classifier returns null for 29/30 inputs. Energy function ranks 1/5 pairs correctly. Both components need real embeddings or better offline fallback to be useful."
+    "classification_type_accuracy": 0.767,
+    "classification_category_accuracy": 0.833,
+    "classification_no_prediction_rate": 0.0,
+    "ranking_accuracy": 0.800
+  }
 }
