@@ -140,32 +140,125 @@ export class SignalClassifier {
   }
 
   /**
+   * Keyword-based signal detection as a fallback/supplement to embeddings.
+   * Returns scores per signal type based on pattern matching.
+   */
+  private keywordScores(text: string): Map<SignalType, number> {
+    const lower = text.toLowerCase();
+    const scores = new Map<SignalType, number>();
+
+    // Correction patterns
+    const correctionPatterns = [
+      /\bno[,.]?\s+(i|that|it|the)\b/i, /\bactually\b/i, /\bwrong\b/i,
+      /\bnot what i\b/i, /\bmisunderstood\b/i, /\bmisread\b/i,
+      /\bi said\b/i, /\bi meant\b/i, /\bi already told\b/i,
+      /\bthat'?s not\b/i, /\bincorrect\b/i, /\bfix this\b/i,
+      /\bnot (\w+ )+but\b/i, /\binstead of\b/i, /\bdon'?t use\b/i,
+      /\byou'?ve got it\b/i, /\bclarify\b/i, /\bcorrect answer\b/i,
+    ];
+    scores.set('correction', correctionPatterns.filter(p => p.test(text)).length);
+
+    // Frustration patterns
+    const frustrationPatterns = [
+      /\bfuck\b/i, /\bfucking\b/i, /\bshit\b/i, /\bcunt\b/i,
+      /\buseless\b/i, /\binfuriating\b/i, /\bfrustrat/i,
+      /\bunacceptable\b/i, /\bridiculous\b/i, /\bangry\b/i,
+      /[A-Z]{4,}/, // ALL CAPS
+      /\bhow many times\b/i, /\bcan you not\b/i, /\bwasting my time\b/i,
+      /\blost my patience\b/i, /\bhad enough\b/i, /\bsick.*tired\b/i,
+    ];
+    scores.set('frustration', frustrationPatterns.filter(p => p.test(text)).length);
+
+    // Takeover patterns
+    const takeoverPatterns = [
+      /\blet me.*(do|handle|take|fix|write)\b/i, /\bi'?ll (do|handle|take|fix|write)\b/i,
+      /\bforget it\b/i, /\bnever mind\b/i, /\bgive me (access|control)\b/i,
+      /\bi'?m taking over\b/i, /\bdon'?t bother\b/i, /\bmove aside\b/i,
+      /\bi got it\b/i, /\bon my own\b/i,
+    ];
+    scores.set('takeover', takeoverPatterns.filter(p => p.test(text)).length);
+
+    // Failure patterns
+    const failurePatterns = [
+      /\bfailed\b/i, /\berror\b/i, /\bcrash/i, /\btimeout\b/i,
+      /\btimed out\b/i, /\bconnection refused\b/i, /\bpermission denied\b/i,
+      /\bnot found\b/i, /\bunavailable\b/i, /\bexit code\b/i,
+      /\bstatus [45]\d\d\b/i, /\bbroken\b/i,
+    ];
+    scores.set('failure', failurePatterns.filter(p => p.test(text)).length);
+
+    // Style patterns
+    const stylePatterns = [
+      /\bformat\b/i, /\bconcise\b/i, /\bverbose\b/i, /\btable/i,
+      /\bbullet/i, /\bspelling\b/i, /\btoo (long|short|wordy)\b/i,
+    ];
+    scores.set('style', stylePatterns.filter(p => p.test(text)).length);
+
+    // Success patterns
+    const successPatterns = [
+      /\bperfect\b/i, /\bexactly\b/i, /\bspot on\b/i, /\bgreat work\b/i,
+      /\bexcellent\b/i, /\bkeep going\b/i, /\bmuch better\b/i,
+      /\bwell done\b/i, /\bnice\b/i, /\bgood job\b/i,
+    ];
+    scores.set('success', successPatterns.filter(p => p.test(text)).length);
+
+    return scores;
+  }
+
+  /**
    * Classify a message.
+   * Uses embedding similarity + keyword fallback for robustness.
    */
   async predict(text: string): Promise<ClassifierPrediction | null> {
     if (this.centroids.size === 0) {
       throw new Error('Classifier not trained');
     }
 
+    // Get embedding-based scores
     const embedding = await getEmbedding(text);
+    const embeddingScores = new Map<SignalType, number>();
+
+    for (const [label, centroid] of this.centroids) {
+      const similarity = cosineSimilarity(embedding, centroid);
+      embeddingScores.set(label, similarity);
+    }
+
+    // Get keyword-based scores
+    const kwScores = this.keywordScores(text);
+
+    // Combine: normalise keyword scores to [0, 1] and blend
+    const maxKw = Math.max(...kwScores.values(), 1);
+    const combinedScores = new Map<SignalType, number>();
+
+    for (const [label] of this.centroids) {
+      const embScore = embeddingScores.get(label) || 0;
+      const kwScore = (kwScores.get(label) || 0) / maxKw;
+      // If embeddings are low-quality (all similar), keywords dominate
+      const embRange = Math.max(...embeddingScores.values()) - Math.min(...embeddingScores.values());
+      const embWeight = embRange > 0.1 ? 0.7 : 0.2; // trust embeddings only if they differentiate
+      combinedScores.set(label, embWeight * embScore + (1 - embWeight) * kwScore);
+    }
 
     let bestType: SignalType | null = null;
     let bestScore = -Infinity;
 
-    for (const [label, centroid] of this.centroids) {
-      const similarity = cosineSimilarity(embedding, centroid);
-      if (similarity > bestScore) {
-        bestScore = similarity;
+    for (const [label, score] of combinedScores) {
+      if (score > bestScore) {
+        bestScore = score;
         bestType = label;
       }
     }
 
-    if (!bestType || bestScore < 0.3) {
-      return null; // No confident prediction
+    if (!bestType) {
+      return null;
     }
 
+    // Confidence based on margin between best and second best
+    const scores = [...combinedScores.values()].sort((a, b) => b - a);
+    const margin = scores.length > 1 ? scores[0] - scores[1] : scores[0];
+
     const confidence: Confidence =
-      bestScore > 0.7 ? 'high' : bestScore > 0.5 ? 'medium' : 'low';
+      margin > 0.3 ? 'high' : margin > 0.1 ? 'medium' : 'low';
 
     return {
       type: bestType,
