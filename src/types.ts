@@ -14,6 +14,7 @@ export type SignalType =
   | 'takeover'
   | 'frustration'
   | 'style'
+  | 'voice_correction'
   | 'success';
 
 export type SignalCategory =

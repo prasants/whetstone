@@ -27,6 +27,9 @@ import {
   generateSyntheticEnergyTrainingData,
   transferToMutation,
 } from './ml/index.js';
+import { TraceRecorder, TaskOutcome, ToolStatus } from './recorder.js';
+import { ExecutionAnalyser, AnalysisResult } from './analyser.js';
+import { SkillEvolver, EvolutionSuggestion, EvolutionRecord } from './evolution.js';
 
 export interface WhetstoneState {
   classifier: ReturnType<SignalClassifier['exportWeights']> | null;
@@ -54,6 +57,11 @@ export class Whetstone {
   private mutations: Array<{ mutation: Mutation; appliedAt: string }> = [];
   private validations: Validation[] = [];
 
+  // Execution recording + analysis + evolution
+  public recorder: TraceRecorder;
+  public analyser: ExecutionAnalyser;
+  public evolver: SkillEvolver;
+
   constructor(workspace: string, agentId: string = 'default') {
     this.workspace = workspace;
     this.agentId = agentId;
@@ -63,6 +71,11 @@ export class Whetstone {
     this.embeddings = new JointEmbeddingSpace();
     this.energy = new EnergyFunction();
     this.transfer = new CrossAgentStore();
+
+    // Execution recording + analysis + evolution
+    this.recorder = new TraceRecorder(workspace);
+    this.analyser = new ExecutionAnalyser(workspace, this.recorder);
+    this.evolver = new SkillEvolver(workspace);
   }
 
   /**
@@ -293,6 +306,103 @@ export class Whetstone {
    */
   rollback(snapshotDir: string): ReturnType<typeof rollbackFromSnapshot> {
     return rollbackFromSnapshot(this.workspace, snapshotDir, this.config);
+  }
+
+  // ── Execution Recording ──────────────────────────────────────
+
+  /**
+   * Start recording a task.
+   */
+  startRecording(taskId: string, description: string): void {
+    this.recorder.start(taskId, description, this.agentId);
+  }
+
+  /**
+   * Record a tool call outcome.
+   */
+  recordTool(taskId: string, tool: string, status: ToolStatus, detail?: string, durationMs?: number): void {
+    this.recorder.tool(taskId, tool, status, detail || '', durationMs);
+  }
+
+  /**
+   * Record an error.
+   */
+  recordError(taskId: string, tool: string, error: string): void {
+    this.recorder.error(taskId, tool, error);
+  }
+
+  /**
+   * End recording and trigger analysis.
+   */
+  async endRecording(taskId: string, outcome: TaskOutcome, summary?: string): Promise<AnalysisResult | null> {
+    this.recorder.end(taskId, outcome, summary || '');
+
+    // Auto-analyse
+    const analysis = this.analyser.analyse(taskId);
+
+    if (analysis) {
+      // Add extracted signals to the system
+      for (const signal of analysis.signals) {
+        await this.addSignal(signal);
+      }
+
+      // Generate evolution suggestions
+      const suggestions = this.evolver.suggestFromAnalysis(analysis);
+      if (suggestions.length > 0) {
+        // Store suggestions for the mutate cycle to pick up
+        const suggestionsPath = resolve(this.workspace, '.whetstone', 'pending-evolutions.json');
+        const existing = existsSync(suggestionsPath)
+          ? JSON.parse(readFileSync(suggestionsPath, 'utf8'))
+          : [];
+        existing.push(...suggestions);
+        writeFileSync(suggestionsPath, JSON.stringify(existing, null, 2));
+      }
+    }
+
+    return analysis;
+  }
+
+  /**
+   * Analyse all pending traces.
+   */
+  async analysePending(): Promise<AnalysisResult[]> {
+    const results = this.analyser.analysePending();
+
+    for (const analysis of results) {
+      for (const signal of analysis.signals) {
+        await this.addSignal(signal);
+      }
+    }
+
+    return results;
+  }
+
+  /**
+   * Get tool reliability stats.
+   */
+  getToolStats(): ReturnType<ExecutionAnalyser['getToolStats']> {
+    return this.analyser.getToolStats();
+  }
+
+  /**
+   * Get degraded tools.
+   */
+  getDegradedTools(): ReturnType<ExecutionAnalyser['getDegradedTools']> {
+    return this.analyser.getDegradedTools();
+  }
+
+  /**
+   * Execute a skill evolution.
+   */
+  evolve(suggestion: EvolutionSuggestion, content: string, signalIds?: string[]): EvolutionRecord {
+    return this.evolver.execute(suggestion, content, signalIds);
+  }
+
+  /**
+   * Get evolution history.
+   */
+  getEvolutionHistory(limit?: number): EvolutionRecord[] {
+    return this.evolver.getHistory(limit);
   }
 
   /**

@@ -95,6 +95,39 @@ export {
   getKeepers,
 } from './validate.js';
 
+// Recorder (execution tracing)
+export { TraceRecorder } from './recorder.js';
+export type {
+  TraceEvent,
+  StartEvent,
+  ToolEvent,
+  ErrorEvent,
+  EndEvent,
+  ToolStats as TraceToolStats,
+  TraceSummary,
+  TraceEventType,
+  ToolStatus,
+  TaskOutcome,
+} from './recorder.js';
+
+// Analyser (post-execution analysis)
+export { ExecutionAnalyser } from './analyser.js';
+export type {
+  AnalysisResult,
+  ToolDegradation,
+  AggregateToolStats,
+} from './analyser.js';
+
+// Evolution (FIX / DERIVED / CAPTURED)
+export { SkillEvolver } from './evolution.js';
+export type {
+  EvolutionType,
+  EvolutionTrigger,
+  EvolutionRecord,
+  EvolutionSuggestion,
+  SkillHealth,
+} from './evolution.js';
+
 // Safety
 export {
   isLineImmutable,
