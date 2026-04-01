@@ -81,7 +81,8 @@ async function main() {
     // Use ML classifier (embeddings + keywords)
     log('Using ML classifier (Ollama embeddings + keywords)');
     const { Whetstone } = await import('../dist/whetstone.js');
-    const whetstone = new Whetstone(workspace, 'vidura');
+    // Use factory: connects to ThoughtLayer if configured, gracefully degrades if not
+    const whetstone = await Whetstone.withThoughtLayer(workspace, 'vidura');
     await whetstone.init();
 
     for (const msg of messages.userMessages) {
@@ -140,7 +141,7 @@ async function main() {
   // Step 8: Also process any pending execution traces
   try {
     const { Whetstone } = await import('../dist/whetstone.js');
-    const whetstone = new Whetstone(workspace, 'vidura');
+    const whetstone = await Whetstone.withThoughtLayer(workspace, 'vidura');
     const pendingResults = await whetstone.analysePending();
     if (pendingResults.length > 0) {
       log(`Analysed ${pendingResults.length} pending execution traces`);

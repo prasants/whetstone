@@ -285,10 +285,11 @@ export class SkillEvolver {
       copyFileSync(skillFile, resolve(snapshotDir, SKILL_FILE));
     }
 
-    // Apply fix (overwrite SKILL.md)
-    if (existsSync(skillDir)) {
-      writeFileSync(skillFile, content);
+    // Apply fix (overwrite SKILL.md) — skill must exist for a fix
+    if (!existsSync(skillDir)) {
+      mkdirSync(skillDir, { recursive: true });
     }
+    writeFileSync(skillFile, content);
 
     return {
       id,

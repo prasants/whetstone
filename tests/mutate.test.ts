@@ -139,6 +139,37 @@ describe('applyMutation', () => {
     expect(result.reason).toContain('not found');
   });
 
+  it('handles multi-line mutation content (regression: collapsed to single line)', () => {
+    const mutation: Mutation = {
+      id: 'M-20260327-multiline',
+      file: 'SOUL.md',
+      action: 'add',
+      location: '## Pre-Flight Checks',
+      content: '- Step 1: Check database\n- Step 2: Verify API keys\n- Step 3: Confirm permissions',
+      risk: 'low',
+      rationale: 'Testing multi-line add',
+      signalCount: 3,
+      signalIds: [],
+      expectedImpact: 'Multi-line test',
+    };
+
+    const result = applyMutation(mutation, TEST_WORKSPACE, DEFAULT_CONFIG);
+    expect(result.applied).toBe(true);
+
+    const content = readFileSync(resolve(TEST_WORKSPACE, 'SOUL.md'), 'utf8');
+    const lines = content.split('\n');
+    // Each line should be separate (not collapsed into one)
+    expect(lines.filter((l) => l.includes('Step 1')).length).toBe(1);
+    expect(lines.filter((l) => l.includes('Step 2')).length).toBe(1);
+    expect(lines.filter((l) => l.includes('Step 3')).length).toBe(1);
+    // They should be on consecutive lines
+    const step1Idx = lines.findIndex((l) => l.includes('Step 1'));
+    const step2Idx = lines.findIndex((l) => l.includes('Step 2'));
+    const step3Idx = lines.findIndex((l) => l.includes('Step 3'));
+    expect(step2Idx).toBe(step1Idx + 1);
+    expect(step3Idx).toBe(step2Idx + 1);
+  });
+
   it('rejects redundant content', () => {
     const mutation: Mutation = {
       id: 'M-20260327-005',

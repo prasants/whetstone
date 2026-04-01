@@ -122,6 +122,37 @@ describe('detectSignalPatterns', () => {
       expect(results).toHaveLength(0);
     });
   });
+
+  describe('regression: ReDoS protection', () => {
+    it('handles long ALL-CAPS strings without catastrophic backtracking', () => {
+      const start = performance.now();
+      const input = 'A'.repeat(100) + ' ' + 'B'.repeat(100);
+      detectSignalPatterns(input);
+      const elapsed = performance.now() - start;
+      // Must complete in < 100ms (ReDoS would take seconds/minutes)
+      expect(elapsed).toBeLessThan(100);
+    });
+  });
+
+  describe('regression: success with "but" elsewhere in message', () => {
+    it('detects success when "but" is unrelated to the positive match', () => {
+      // "but" appears but NOT adjacent to the success word
+      const results = detectSignalPatterns('I tried but failed, then you nailed it');
+      expect(results.some((r) => r.type === 'success')).toBe(true);
+    });
+  });
+});
+
+describe('analyseConversation deduplication', () => {
+  it('returns at most one signal per type per turn (regression: duplicate signals)', () => {
+    const turns: ConversationTurn[] = [
+      { role: 'user', content: 'Perfect perfect perfect, exactly what I wanted, spot on' },
+    ];
+
+    const results = analyseConversation(turns);
+    const successCount = results.filter((r) => r.detection.type === 'success').length;
+    expect(successCount).toBe(1); // Was 3 before dedup fix
+  });
 });
 
 describe('analyseConversation', () => {

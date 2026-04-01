@@ -49,6 +49,16 @@ describe('cosineSimilarity', () => {
     const b = [1, 2];
     expect(() => cosineSimilarity(a, b)).toThrow('Vector length mismatch');
   });
+
+  it('returns 0 for zero vectors (regression: NaN bug)', () => {
+    const zero = [0, 0, 0];
+    const vec = [1, 2, 3];
+    expect(cosineSimilarity(zero, vec)).toBe(0);
+    expect(cosineSimilarity(vec, zero)).toBe(0);
+    expect(cosineSimilarity(zero, zero)).toBe(0);
+    // Ensure no NaN propagation
+    expect(Number.isNaN(cosineSimilarity(zero, vec))).toBe(false);
+  });
 });
 
 describe('generateSyntheticTrainingData', () => {

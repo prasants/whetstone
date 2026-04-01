@@ -51,8 +51,8 @@ export interface AggregateToolStats {
 
 // ── Thresholds ──────────────────────────────────────────────────
 
-const DEGRADATION_THRESHOLD = 0.5; // 50% error rate = degradation
-const CRITICAL_THRESHOLD = 0.8; // 80% error rate = critical
+const DEGRADATION_THRESHOLD = 0.5; // success rate below 50% = degradation
+const CRITICAL_SUCCESS_FLOOR = 0.2; // success rate below 20% (80% error rate) = critical
 const EXCESSIVE_RETRIES = 2; // >2 retries in one task = signal
 
 // ── Analyser ────────────────────────────────────────────────────
@@ -83,7 +83,7 @@ export class ExecutionAnalyser {
 
       if (toolStat.total > 0 && toolStat.successRate < DEGRADATION_THRESHOLD) {
         const severity =
-          toolStat.successRate < (1 - CRITICAL_THRESHOLD) ? 'critical' : 'warning';
+          toolStat.successRate < CRITICAL_SUCCESS_FLOOR ? 'critical' : 'warning';
         const lastError =
           summary.errorMessages.find((e) =>
             e.toLowerCase().includes(toolStat.tool.toLowerCase()),

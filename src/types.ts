@@ -91,6 +91,15 @@ export interface SignalCluster {
 
 // ── Configuration ───────────────────────────────────────────────
 
+export interface ThoughtLayerConfig {
+  /** Enable ThoughtLayer integration. Default: false. */
+  enabled: boolean;
+  /** Root path for ThoughtLayer database. Default: workspace path. */
+  projectRoot?: string;
+  /** Domain namespace for Whetstone entries. Default: "whetstone". */
+  domain?: string;
+}
+
 export interface WhetstoneConfig {
   version: string;
   senseModel: string | null;
@@ -101,6 +110,8 @@ export interface WhetstoneConfig {
   immutableMarkers: string[];
   thoughtlayerDomain: string;
   mutableFiles: MutableFile[];
+  /** Optional ThoughtLayer integration. Install `thoughtlayer` package to enable. */
+  thoughtlayer?: ThoughtLayerConfig;
 }
 
 export const DEFAULT_CONFIG: WhetstoneConfig = {

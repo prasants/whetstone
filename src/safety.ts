@@ -26,8 +26,10 @@ export function isLineImmutable(
   line: string,
   markers: string[],
 ): boolean {
-  const upper = line.toUpperCase();
-  return markers.some((m) => upper.includes(m.toUpperCase()));
+  return markers.some((m) => {
+    const escaped = m.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`\\b${escaped}\\b`, 'i').test(line);
+  });
 }
 
 /**
@@ -149,17 +151,17 @@ export function snapshotFiles(
   config: WhetstoneConfig,
   date?: string,
 ): string {
-  const dateStr = date || new Date().toISOString().split('T')[0];
-  const snapshotDir = resolve(
-    workspace,
-    '.whetstone',
-    'rollbacks',
-    dateStr,
-  );
+  const now = new Date();
+  const dateStr = date || now.toISOString().replace(/[:.]/g, '-').replace('T', '_').slice(0, 19);
+  let snapshotDir = resolve(workspace, '.whetstone', 'rollbacks', dateStr);
 
-  if (!existsSync(snapshotDir)) {
-    mkdirSync(snapshotDir, { recursive: true });
+  // Avoid collisions: append incrementing suffix if directory already exists
+  let attempt = 0;
+  while (existsSync(snapshotDir)) {
+    attempt++;
+    snapshotDir = resolve(workspace, '.whetstone', 'rollbacks', `${dateStr}_${attempt}`);
   }
+  mkdirSync(snapshotDir, { recursive: true });
 
   for (const file of config.mutableFiles) {
     const src = resolve(workspace, file);

@@ -87,9 +87,9 @@ class MLP {
   }
 
   /**
-   * Simple gradient descent training step.
+   * Gradient descent training step with L2 regularization.
    */
-  trainStep(input: number[], target: number, lr: number = 0.01): number {
+  trainStep(input: number[], target: number, lr: number = 0.01, weightDecay: number = 1e-4): number {
     // Forward pass
     const hidden = this.weightsInputHidden.map((weights, i) => {
       const sum = weights.reduce((acc, w, j) => acc + w * input[j], 0);
@@ -121,15 +121,15 @@ class MLP {
     );
     const dBiasHidden = dHidden;
 
-    // Update weights
+    // Update weights with L2 regularization (weight decay)
     for (let i = 0; i < this.weightsHiddenOutput.length; i++) {
-      this.weightsHiddenOutput[i] -= lr * dWeightsHiddenOutput[i];
+      this.weightsHiddenOutput[i] -= lr * (dWeightsHiddenOutput[i] + weightDecay * this.weightsHiddenOutput[i]);
     }
     this.biasOutput -= lr * dBiasOutput;
 
     for (let i = 0; i < this.weightsInputHidden.length; i++) {
       for (let j = 0; j < this.weightsInputHidden[i].length; j++) {
-        this.weightsInputHidden[i][j] -= lr * dWeightsInputHidden[i][j];
+        this.weightsInputHidden[i][j] -= lr * (dWeightsInputHidden[i][j] + weightDecay * this.weightsInputHidden[i][j]);
       }
       this.biasHidden[i] -= lr * dBiasHidden[i];
     }
@@ -278,19 +278,45 @@ export class EnergyFunction {
       examples.push({ input, target });
     }
 
-    // Train
+    // Train with cosine learning rate decay and early stopping
+    const baseLR = 0.01;
+    const patience = 15;
+    let bestLoss = Infinity;
+    let staleEpochs = 0;
     let totalLoss = 0;
+
     for (let epoch = 0; epoch < epochs; epoch++) {
       totalLoss = 0;
-      // Shuffle examples
-      const shuffled = [...examples].sort(() => Math.random() - 0.5);
+      // Cosine annealing learning rate
+      const lr = baseLR * 0.5 * (1 + Math.cos(Math.PI * epoch / epochs));
 
-      for (const { input, target } of shuffled) {
-        totalLoss += this.mlp.trainStep(input, target, 0.01);
+      // Fisher-Yates shuffle (unbiased)
+      const shuffled = [...examples];
+      for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
       }
 
+      for (const { input, target } of shuffled) {
+        totalLoss += this.mlp.trainStep(input, target, lr);
+      }
+
+      const avgLoss = totalLoss / examples.length;
+
       if (epoch % 10 === 0) {
-        console.log(`Epoch ${epoch}: loss = ${(totalLoss / examples.length).toFixed(4)}`);
+        console.log(`Epoch ${epoch}: loss = ${avgLoss.toFixed(4)}, lr = ${lr.toFixed(5)}`);
+      }
+
+      // Early stopping
+      if (avgLoss < bestLoss - 1e-6) {
+        bestLoss = avgLoss;
+        staleEpochs = 0;
+      } else {
+        staleEpochs++;
+        if (staleEpochs >= patience) {
+          console.log(`Early stopping at epoch ${epoch} (loss plateau: ${avgLoss.toFixed(4)})`);
+          break;
+        }
       }
     }
 
@@ -358,37 +384,82 @@ export function generateSyntheticEnergyTrainingData(): Array<{
     validation: Validation;
   }> = [];
 
-  // Good mutations (keep)
+  // Good mutations (keep) — balanced with bad mutations for better training
   const goodMutations = [
     {
       content: 'Before running remote commands, check if the node runner is available',
       rationale: 'Agent used SSH 5 times when node runner was available',
       signalsBefore: 5,
       signalsAfter: 1,
+      file: 'SOUL.md' as const,
+      risk: 'low' as const,
+      category: 'tool_use',
     },
     {
       content: 'Query the database directly instead of asking the user for data',
       rationale: 'Agent asked user for data that was already in the database 4 times',
       signalsBefore: 4,
       signalsAfter: 0,
+      file: 'SOUL.md' as const,
+      risk: 'low' as const,
+      category: 'tool_use',
     },
     {
-      content: 'Use British English spellings',
+      content: 'Use British English spellings in all documentation and comments',
       rationale: 'User corrected American spellings 3 times',
       signalsBefore: 3,
       signalsAfter: 0,
+      file: 'SOUL.md' as const,
+      risk: 'low' as const,
+      category: 'style',
+    },
+    {
+      content: 'When a tool fails with a timeout, wait 5 seconds before retrying',
+      rationale: 'Agent retried failed tools immediately causing cascading failures',
+      signalsBefore: 6,
+      signalsAfter: 1,
+      file: 'TOOLS.md' as const,
+      risk: 'medium' as const,
+      category: 'tool_use',
+    },
+    {
+      content: 'Present search results as a numbered list with source links',
+      rationale: 'User reformatted search output 4 times into numbered lists',
+      signalsBefore: 4,
+      signalsAfter: 0,
+      file: 'SOUL.md' as const,
+      risk: 'low' as const,
+      category: 'style',
+    },
+    {
+      content: 'Always confirm before deleting files or modifying permissions',
+      rationale: 'User expressed frustration 3 times after destructive actions',
+      signalsBefore: 3,
+      signalsAfter: 0,
+      file: 'AGENTS.md' as const,
+      risk: 'medium' as const,
+      category: 'judgment',
+    },
+    {
+      content: 'Check git status before making commits to avoid including untracked files',
+      rationale: 'Agent committed untracked files twice, user had to reset',
+      signalsBefore: 2,
+      signalsAfter: 0,
+      file: 'TOOLS.md' as const,
+      risk: 'low' as const,
+      category: 'tool_use',
     },
   ];
 
-  for (const { content, rationale, signalsBefore, signalsAfter } of goodMutations) {
+  for (const { content, rationale, signalsBefore, signalsAfter, file, risk, category } of goodMutations) {
     data.push({
       mutation: {
         id: `M-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
-        file: 'SOUL.md',
+        file,
         action: 'add',
         location: '## Pre-Flight Checks',
         content,
-        risk: 'low',
+        risk,
         rationale,
         signalCount: signalsBefore,
         signalIds: [],
@@ -396,9 +467,9 @@ export function generateSyntheticEnergyTrainingData(): Array<{
       },
       context: {
         recentSignalTypes: Array(signalsBefore).fill('correction'),
-        recentCategories: Array(signalsBefore).fill('tool_use'),
-        targetFile: 'SOUL.md',
-        riskLevel: 'low',
+        recentCategories: Array(signalsBefore).fill(category),
+        targetFile: file,
+        riskLevel: risk,
       },
       validation: {
         mutationId: '',
@@ -412,48 +483,92 @@ export function generateSyntheticEnergyTrainingData(): Array<{
     });
   }
 
-  // Bad mutations (rollback)
+  // Bad mutations (rollback) — balanced count with good mutations
   const badMutations = [
     {
       content: 'When asked about Project X, the budget is $50k',
       rationale: 'User mentioned Project X budget once',
       signalsBefore: 1,
       signalsAfter: 2,
+      file: 'TOOLS.md' as const,
+      risk: 'low' as const,
     },
     {
       content: 'Always use verbose output',
       rationale: 'User wanted verbose output once',
       signalsBefore: 1,
       signalsAfter: 3,
+      file: 'SOUL.md' as const,
+      risk: 'low' as const,
+    },
+    {
+      content: 'Never ask clarifying questions, always infer intent',
+      rationale: 'User seemed annoyed by a question once',
+      signalsBefore: 1,
+      signalsAfter: 5,
+      file: 'SOUL.md' as const,
+      risk: 'high' as const,
+    },
+    {
+      content: 'Use Python instead of TypeScript for all scripts',
+      rationale: 'User used Python in one unrelated task',
+      signalsBefore: 1,
+      signalsAfter: 4,
+      file: 'TOOLS.md' as const,
+      risk: 'medium' as const,
+    },
+    {
+      content: 'Skip tests when making small changes to save time',
+      rationale: 'User skipped tests once on a trivial change',
+      signalsBefore: 0,
+      signalsAfter: 3,
+      file: 'AGENTS.md' as const,
+      risk: 'high' as const,
+    },
+    {
+      content: 'Respond with maximum detail including all edge cases',
+      rationale: 'User asked for detail once on a complex topic',
+      signalsBefore: 1,
+      signalsAfter: 4,
+      file: 'SOUL.md' as const,
+      risk: 'low' as const,
+    },
+    {
+      content: 'Cache API credentials in the heartbeat for faster access',
+      rationale: 'Agent was slow authenticating twice',
+      signalsBefore: 2,
+      signalsAfter: 2,
+      file: 'HEARTBEAT.md' as const,
+      risk: 'high' as const,
     },
   ];
 
-  for (const { content, rationale, signalsBefore, signalsAfter } of badMutations) {
+  for (const { content, rationale, signalsBefore, signalsAfter, file, risk } of badMutations) {
     data.push({
       mutation: {
         id: `M-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
-        file: 'TOOLS.md',
+        file,
         action: 'add',
         location: '## Notes',
         content,
-        risk: 'low',
+        risk,
         rationale,
         signalCount: signalsBefore,
         signalIds: [],
         expectedImpact: 'Reduce corrections',
       },
       context: {
-        recentSignalTypes: ['correction'],
-        recentCategories: ['knowledge'],
-        targetFile: 'TOOLS.md',
-        riskLevel: 'low',
+        recentSignalTypes: Array(Math.max(signalsBefore, 1)).fill('correction'),
+        recentCategories: Array(Math.max(signalsBefore, 1)).fill('knowledge'),
+        targetFile: file,
+        riskLevel: risk,
       },
       validation: {
         mutationId: '',
         signalsBefore,
         signalsAfter,
         verdict: 'rollback',
-        reason: 'Signals increased',
+        reason: 'Signals increased or unchanged',
         impactScore: signalsBefore - signalsAfter,
         validatedAt: new Date().toISOString(),
       },

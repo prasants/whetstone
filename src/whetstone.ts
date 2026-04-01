@@ -16,6 +16,7 @@ import {
   Mutation,
   Validation,
   WhetstoneConfig,
+  ThoughtLayerClient,
   DEFAULT_CONFIG,
 } from './types.js';
 import {
@@ -62,7 +63,11 @@ export class Whetstone {
   public analyser: ExecutionAnalyser;
   public evolver: SkillEvolver;
 
-  constructor(workspace: string, agentId: string = 'default') {
+  // Optional ThoughtLayer integration (install `thoughtlayer` package to enable)
+  private thoughtlayer: ThoughtLayerClient | null = null;
+  private thoughtlayerDomain: string = 'whetstone';
+
+  constructor(workspace: string, agentId: string = 'default', thoughtlayer?: ThoughtLayerClient) {
     this.workspace = workspace;
     this.agentId = agentId;
     this.config = loadConfig(workspace);
@@ -76,6 +81,78 @@ export class Whetstone {
     this.recorder = new TraceRecorder(workspace);
     this.analyser = new ExecutionAnalyser(workspace, this.recorder);
     this.evolver = new SkillEvolver(workspace);
+
+    // ThoughtLayer integration (optional)
+    if (thoughtlayer) {
+      this.thoughtlayer = thoughtlayer;
+      this.thoughtlayerDomain = this.config.thoughtlayer?.domain || this.config.thoughtlayerDomain || 'whetstone';
+      console.log(`[whetstone] ThoughtLayer integration enabled (domain: ${this.thoughtlayerDomain})`);
+    }
+  }
+
+  /**
+   * Factory: create Whetstone with ThoughtLayer if available and configured.
+   *
+   * Dynamically imports the `thoughtlayer` package. If the package is not
+   * installed or config.thoughtlayer.enabled is false, returns a standard
+   * Whetstone instance without ThoughtLayer.
+   */
+  static async withThoughtLayer(workspace: string, agentId: string = 'default'): Promise<Whetstone> {
+    const config = loadConfig(workspace);
+    const tlConfig = config.thoughtlayer;
+
+    if (!tlConfig?.enabled) {
+      return new Whetstone(workspace, agentId);
+    }
+
+    try {
+      // Dynamic import — works even if thoughtlayer is not installed
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const tlModule = await (Function('return import("thoughtlayer")')() as Promise<any>);
+      const ThoughtLayer = tlModule.ThoughtLayer || tlModule.default?.ThoughtLayer;
+      if (!ThoughtLayer) throw new Error('ThoughtLayer class not found in module');
+
+      const projectRoot = tlConfig.projectRoot || workspace;
+      const tl = new ThoughtLayer({ projectRoot });
+      const domain = tlConfig.domain || config.thoughtlayerDomain || 'whetstone';
+
+      // Adapt ThoughtLayer to ThoughtLayerClient interface
+      const client: ThoughtLayerClient = {
+        async add(entry) {
+          const result = await tl.curate(entry.content, {
+            domain: entry.domain,
+            title: entry.title,
+            metadata: entry.metadata,
+          });
+          return { id: result?.id || `tl-${Date.now()}` };
+        },
+        async query(query, topK = 10) {
+          const results = await tl.retrieve(query, { topK, domain });
+          return (results || []).map((r: Record<string, unknown>) => ({
+            id: r.id as string,
+            title: r.title as string,
+            content: r.content as string,
+            score: r.score as number,
+            domain,
+          }));
+        },
+        async list(d) {
+          const results = await tl.retrieve('*', { topK: 100, domain: d || domain });
+          return (results || []).map((r: Record<string, unknown>) => ({
+            id: r.id as string,
+            domain: d || domain,
+            title: r.title as string,
+            content: r.content as string,
+          }));
+        },
+      };
+
+      console.log(`[whetstone] ThoughtLayer connected (project: ${projectRoot}, domain: ${domain})`);
+      return new Whetstone(workspace, agentId, client);
+    } catch (err) {
+      console.warn('[whetstone] ThoughtLayer package not available, continuing without it:', (err as Error).message);
+      return new Whetstone(workspace, agentId);
+    }
   }
 
   /**
@@ -121,11 +198,10 @@ export class Whetstone {
     // Use real data if available, otherwise synthetic
     let trainingData = generateSyntheticEnergyTrainingData();
 
-    // Add any real validation data we have
+    // Add any real validation data we have (O(1) lookup via Map)
+    const mutationMap = new Map(this.mutations.map((m) => [m.mutation.id, m]));
     for (const validation of this.validations) {
-      const mutation = this.mutations.find(
-        (m) => m.mutation.id === validation.mutationId,
-      );
+      const mutation = mutationMap.get(validation.mutationId);
       if (mutation) {
         trainingData.push({
           mutation: mutation.mutation,
@@ -186,17 +262,28 @@ export class Whetstone {
    */
   async addSignal(signal: Signal): Promise<string> {
     const id = `S-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`;
+    const createdAt = new Date().toISOString();
 
-    this.signals.push({
-      id,
-      signal,
-      createdAt: new Date().toISOString(),
-    });
+    this.signals.push({ id, signal, createdAt });
 
     // Add to embedding space
     await this.embeddings.addSignal(id, signal);
 
-    // Persist state
+    // Persist to ThoughtLayer if available
+    if (this.thoughtlayer) {
+      try {
+        await this.thoughtlayer.add({
+          domain: this.thoughtlayerDomain,
+          title: `[signal] ${signal.type}: ${signal.context?.substring(0, 80) || 'no context'}`,
+          content: JSON.stringify(signal),
+          metadata: { signalId: id, type: signal.type, category: signal.category, confidence: signal.confidence, createdAt },
+        });
+      } catch (err) {
+        console.warn(`[whetstone] Failed to persist signal to ThoughtLayer: ${(err as Error).message}`);
+      }
+    }
+
+    // Persist local state
     this.saveState();
 
     return id;
@@ -231,10 +318,19 @@ export class Whetstone {
     const result = applyMutation(mutation, this.workspace, this.config);
 
     if (result.applied) {
-      this.mutations.push({
-        mutation,
-        appliedAt: new Date().toISOString(),
-      });
+      const appliedAt = new Date().toISOString();
+      this.mutations.push({ mutation, appliedAt });
+
+      // Persist to ThoughtLayer if available
+      if (this.thoughtlayer) {
+        this.thoughtlayer.add({
+          domain: this.thoughtlayerDomain,
+          title: `[mutation] ${mutation.id}: ${mutation.rationale.substring(0, 80)}`,
+          content: JSON.stringify({ mutation, result: { applied: true }, appliedAt }),
+          metadata: { mutationId: mutation.id, file: mutation.file, risk: mutation.risk, action: mutation.action },
+        }).catch((err) => console.warn(`[whetstone] Failed to persist mutation to ThoughtLayer: ${(err as Error).message}`));
+      }
+
       this.saveState();
     }
 
@@ -271,6 +367,16 @@ export class Whetstone {
         [], // toolsInvolved
         [mutation.mutation.file], // filesInvolved
       );
+    }
+
+    // Persist to ThoughtLayer if available
+    if (this.thoughtlayer) {
+      this.thoughtlayer.add({
+        domain: this.thoughtlayerDomain,
+        title: `[validation] ${mutationId}: ${validation.verdict}`,
+        content: JSON.stringify(validation),
+        metadata: { mutationId, verdict: validation.verdict, impactScore: validation.impactScore },
+      }).catch((err) => console.warn(`[whetstone] Failed to persist validation to ThoughtLayer: ${(err as Error).message}`));
     }
 
     this.saveState();

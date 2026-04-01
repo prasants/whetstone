@@ -13,6 +13,7 @@ import {
   SafetyCheckResult,
 } from './types.js';
 import { checkMutationSafety, snapshotFiles } from './safety.js';
+import { atomicWriteFileSync } from './config.js';
 
 export interface ApplyResult {
   mutationId: string;
@@ -55,7 +56,7 @@ export function applyMutation(
   const filePath = resolve(workspace, mutation.file);
 
   if (mutation.action === 'add') {
-    return applyAddMutation(mutation, filePath);
+    return applyAddMutation(mutation, filePath, config);
   }
 
   if (mutation.action === 'modify') {
@@ -73,25 +74,31 @@ export function applyMutation(
 function applyAddMutation(
   mutation: Mutation,
   filePath: string,
+  config: WhetstoneConfig,
 ): ApplyResult {
-  const safetyCheck: SafetyCheckResult = {
-    passed: true,
-    immutableViolations: [],
-    conflicts: [],
-    redundancies: [],
-  };
+  // Run safety checks even for add mutations (redundancy, immutability)
+  const safetyCheck = existsSync(filePath)
+    ? checkMutationSafety(mutation, filePath, config)
+    : { passed: true, immutableViolations: [], conflicts: [], redundancies: [] };
+
+  if (!safetyCheck.passed) {
+    return { mutationId: mutation.id, applied: false, reason: 'Safety check failed', safetyCheck };
+  }
 
   if (!existsSync(filePath)) {
     // Create file with content
-    writeFileSync(filePath, mutation.content + '\n');
+    atomicWriteFileSync(filePath, mutation.content + '\n');
     return { mutationId: mutation.id, applied: true, safetyCheck };
   }
 
   const content = readFileSync(filePath, 'utf8');
   const lines = content.split('\n');
 
-  // Find the anchor line
-  const anchorIdx = lines.findIndex((l) => l.includes(mutation.location));
+  // Find the anchor line (exact trimmed match to avoid partial substring hits)
+  // Match anchor: strip leading list markers (- , * , digits.) then compare
+  const normalise = (s: string) => s.trim().replace(/^[-*]\s+|^\d+\.\s+/, '');
+  const target = normalise(mutation.location);
+  const anchorIdx = lines.findIndex((l) => normalise(l) === target);
 
   if (anchorIdx === -1) {
     return {
@@ -102,9 +109,10 @@ function applyAddMutation(
     };
   }
 
-  // Insert after the anchor
-  lines.splice(anchorIdx + 1, 0, mutation.content);
-  writeFileSync(filePath, lines.join('\n'));
+  // Insert after the anchor (split multi-line content)
+  const newLines = mutation.content.split('\n');
+  lines.splice(anchorIdx + 1, 0, ...newLines);
+  atomicWriteFileSync(filePath, lines.join('\n'));
 
   return { mutationId: mutation.id, applied: true, safetyCheck };
 }
@@ -133,7 +141,9 @@ function applyModifyMutation(
   const content = readFileSync(filePath, 'utf8');
   const lines = content.split('\n');
 
-  const targetIdx = lines.findIndex((l) => l.includes(mutation.location));
+  const normalise = (s: string) => s.trim().replace(/^[-*]\s+|^\d+\.\s+/, '');
+  const target = normalise(mutation.location);
+  const targetIdx = lines.findIndex((l) => normalise(l) === target);
 
   if (targetIdx === -1) {
     return {
@@ -145,7 +155,7 @@ function applyModifyMutation(
   }
 
   lines[targetIdx] = mutation.content;
-  writeFileSync(filePath, lines.join('\n'));
+  atomicWriteFileSync(filePath, lines.join('\n'));
 
   return { mutationId: mutation.id, applied: true, safetyCheck };
 }

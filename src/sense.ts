@@ -54,7 +54,7 @@ const DETECTION_PATTERNS: DetectionPattern[] = [
       /\bdumbf/i,
       /\bfor\s+f+.+\s+sake/i,
       /\bI\s+(already|just)\s+told\s+you/i,
-      /[A-Z\s]{10,}/,  // Extended ALL CAPS
+      /[A-Z ]{10,}/,  // Extended ALL CAPS (avoid \s to prevent ReDoS)
       /\bhow\s+many\s+times/i,
     ],
     category: 'judgment',
@@ -88,7 +88,7 @@ const DETECTION_PATTERNS: DetectionPattern[] = [
       /\bgood\s+(job|work)\b/i,
     ],
     negativePatterns: [
-      /\bbut\b/i,  // "Perfect, but..." is not a success
+      /\b(perfect|great|exactly)\b.*\bbut\b/i,  // "Perfect, but..." is qualified, not pure success
     ],
     category: 'judgment',
     confidence: 'medium',
@@ -171,7 +171,11 @@ export function analyseConversation(
       ? turns[i - 1].content.substring(0, 150)
       : '';
 
+    // Deduplicate: only one signal per type per turn
+    const seen = new Set<SignalType>();
     for (const detection of detections) {
+      if (seen.has(detection.type)) continue;
+      seen.add(detection.type);
       results.push({
         turnIndex: i,
         detection,
