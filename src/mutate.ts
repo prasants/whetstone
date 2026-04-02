@@ -6,6 +6,7 @@
  */
 
 import { existsSync, readFileSync, writeFileSync } from 'fs';
+import { execSync } from 'child_process';
 import { resolve } from 'path';
 import {
   Mutation,
@@ -33,7 +34,12 @@ export function applyMutation(
   workspace: string,
   config: WhetstoneConfig,
 ): ApplyResult {
-  // Run safety checks first
+  // Store mutations go to ThoughtLayer, not files — skip file-based safety checks
+  if (mutation.action === 'store') {
+    return applyStoreMutation(mutation, workspace);
+  }
+
+  // Run safety checks for file-based mutations
   const safetyCheck = checkMutationSafety(mutation, workspace, config);
 
   if (!safetyCheck.passed) {
@@ -158,6 +164,84 @@ function applyModifyMutation(
   atomicWriteFileSync(filePath, lines.join('\n'));
 
   return { mutationId: mutation.id, applied: true, safetyCheck };
+}
+
+function applyStoreMutation(
+  mutation: Mutation,
+  workspace: string,
+): ApplyResult {
+  const safetyCheck: SafetyCheckResult = {
+    passed: true,
+    immutableViolations: [],
+    conflicts: [],
+    redundancies: [],
+  };
+
+  if (!mutation.content || mutation.content.trim().length === 0) {
+    return {
+      mutationId: mutation.id,
+      applied: false,
+      reason: 'Store mutation has empty content',
+      safetyCheck,
+    };
+  }
+
+  const title = mutation.content.slice(0, 60).replace(/\n/g, ' ');
+
+  try {
+    const result = execSync(
+      `thoughtlayer add --domain corrections --importance 1.0 --title "${title.replace(/"/g, '\\"')}" --dir "${workspace}" -`,
+      {
+        input: mutation.content,
+        encoding: 'utf8',
+        timeout: 10000,
+      },
+    );
+
+    // Parse entry ID from output like "✅ Added: <title> [<id>]"
+    const idMatch = result.match(/\[([^\]]+)\]$/m);
+    if (idMatch) {
+      mutation.entryId = idMatch[1];
+    }
+
+    return { mutationId: mutation.id, applied: true, safetyCheck };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    return {
+      mutationId: mutation.id,
+      applied: false,
+      reason: `ThoughtLayer store failed: ${message}`,
+      safetyCheck,
+    };
+  }
+}
+
+/**
+ * Rollback a store mutation by marking its correction as low importance.
+ * This prevents it from surfacing in preflight queries (which filter importance >= 0.9).
+ */
+export function rollbackStoreMutation(
+  mutation: Mutation,
+  workspace: string,
+): { rolledBack: boolean; reason?: string } {
+  if (!mutation.entryId) {
+    return { rolledBack: false, reason: 'No entry ID recorded for store mutation' };
+  }
+
+  try {
+    execSync(
+      `thoughtlayer add --domain corrections --importance 0.0 --title "[rolled-back] ${mutation.id}" --dir "${workspace}" -`,
+      {
+        input: `Rolled back correction: ${mutation.entryId}`,
+        encoding: 'utf8',
+        timeout: 10000,
+      },
+    );
+    return { rolledBack: true };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { rolledBack: false, reason: `ThoughtLayer rollback failed: ${message}` };
+  }
 }
 
 /**

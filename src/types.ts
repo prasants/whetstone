@@ -42,7 +42,7 @@ export interface Signal {
 
 // ── Mutation Types ──────────────────────────────────────────────
 
-export type MutationAction = 'add' | 'modify';
+export type MutationAction = 'add' | 'modify' | 'store';
 export type RiskLevel = 'low' | 'medium' | 'high' | 'critical';
 
 export type MutableFile =
@@ -63,6 +63,8 @@ export interface Mutation {
   signalIds: string[];
   expectedImpact: string;
   appliedAt?: string;
+  /** ThoughtLayer entry ID — set after a successful store mutation. */
+  entryId?: string;
 }
 
 // ── Validation Types ────────────────────────────────────────────

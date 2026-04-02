@@ -6,7 +6,7 @@ Whetstone is a self-improving agent framework. It audits agent behaviour, detect
 
 Every AI agent is stuck in groundhog day — making the same mistakes, forgetting the same corrections. Whetstone fixes this by turning user frustration into durable behaviour changes, validated by evidence and reversible by design.
 
-**Version:** 1.2.0
+**Version:** 1.4.0
 **Language:** TypeScript (strict mode)
 **Runtime dependencies:** Zero
 **Author:** Prasant Sudhakaran

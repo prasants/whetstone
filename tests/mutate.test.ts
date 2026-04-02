@@ -1,12 +1,17 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from 'fs';
 import { resolve } from 'path';
 import {
   applyMutation,
   applyMutationBatch,
   generateMutationId,
+  rollbackStoreMutation,
 } from '../src/mutate.js';
 import { DEFAULT_CONFIG, Mutation } from '../src/types.js';
+
+vi.mock('child_process', () => ({
+  execSync: vi.fn(() => '✅ Added: test correction [abc-123]'),
+}));
 
 const TEST_WORKSPACE = resolve(import.meta.dirname, '.test-workspace-mutate');
 
@@ -247,6 +252,109 @@ describe('applyMutationBatch', () => {
 
     const { results } = applyMutationBatch(mutations, TEST_WORKSPACE, DEFAULT_CONFIG);
     expect(results.every((r) => r.applied)).toBe(true);
+  });
+});
+
+describe('applyStoreMutation', () => {
+  it('applies store mutation via ThoughtLayer CLI', async () => {
+    const { execSync } = await import('child_process');
+    const mutation: Mutation = {
+      id: 'M-20260402-001',
+      action: 'store',
+      location: '',
+      content: 'Always try alternative approaches before saying something is unavailable',
+      risk: 'low',
+      rationale: 'Agent repeatedly claims things are broken without trying alternatives',
+      signalCount: 5,
+      signalIds: ['s1', 's2', 's3', 's4', 's5'],
+      expectedImpact: 'Reduce false "unavailable" claims',
+    };
+
+    const result = applyMutation(mutation, TEST_WORKSPACE, DEFAULT_CONFIG);
+    expect(result.applied).toBe(true);
+    expect(execSync).toHaveBeenCalled();
+    expect(mutation.entryId).toBe('abc-123');
+  });
+
+  it('rejects store mutation with empty content', () => {
+    const mutation: Mutation = {
+      id: 'M-20260402-002',
+      action: 'store',
+      location: '',
+      content: '',
+      risk: 'low',
+      rationale: 'Testing',
+      signalCount: 1,
+      signalIds: [],
+      expectedImpact: 'None',
+    };
+
+    const result = applyMutation(mutation, TEST_WORKSPACE, DEFAULT_CONFIG);
+    expect(result.applied).toBe(false);
+    expect(result.reason).toContain('empty content');
+  });
+
+  it('handles CLI failure gracefully', async () => {
+    const { execSync } = await import('child_process');
+    (execSync as any).mockImplementationOnce(() => {
+      throw new Error('thoughtlayer: command not found');
+    });
+
+    const mutation: Mutation = {
+      id: 'M-20260402-003',
+      action: 'store',
+      location: '',
+      content: 'Some correction content',
+      risk: 'low',
+      rationale: 'Testing',
+      signalCount: 1,
+      signalIds: [],
+      expectedImpact: 'None',
+    };
+
+    const result = applyMutation(mutation, TEST_WORKSPACE, DEFAULT_CONFIG);
+    expect(result.applied).toBe(false);
+    expect(result.reason).toContain('ThoughtLayer store failed');
+  });
+});
+
+describe('rollbackStoreMutation', () => {
+  it('rolls back a store mutation with entry ID', async () => {
+    const { execSync } = await import('child_process');
+    const mutation: Mutation = {
+      id: 'M-20260402-001',
+      action: 'store',
+      location: '',
+      content: 'Some correction',
+      risk: 'low',
+      rationale: 'Testing',
+      signalCount: 1,
+      signalIds: [],
+      expectedImpact: 'None',
+      entryId: 'abc-123',
+    };
+
+    const result = rollbackStoreMutation(mutation, TEST_WORKSPACE);
+    expect(result.rolledBack).toBe(true);
+    expect(execSync).toHaveBeenCalled();
+  });
+
+  it('fails rollback with missing entry ID', () => {
+    const mutation: Mutation = {
+      id: 'M-20260402-002',
+      action: 'store',
+      location: '',
+      content: 'Some correction',
+      risk: 'low',
+      rationale: 'Testing',
+      signalCount: 1,
+      signalIds: [],
+      expectedImpact: 'None',
+    };
+
+    const result = rollbackStoreMutation(mutation, TEST_WORKSPACE);
+    expect(result.rolledBack).toBe(false);
+    expect(result.reason).toContain('No entry ID');
   });
 });
 
